@@ -16,15 +16,15 @@ const zombie_speed: f32 = 150.0;
 const bullet_size: f32 = 8.0;
 const bullet_speed: f32 = 900.0;
 
-const max_zombies: usize = 128;
-const max_bullets: usize = 128;
+const max_zombies: usize = 256;
+const max_bullets: usize = 256;
 
 const initial_spawn_interval: f32 = 1.0;
-const minimum_spawn_interval: f32 = 0.5;
+const minimum_spawn_interval: f32 = 0.1;
 const spawn_interval_decrease: f32 = 0.1;
-const spawn_decay_period: f32 = 30.0;
+const spawn_decay_period: f32 = 15.0;
 
-const initial_rescue_radius: f32 = 60.0;
+const initial_rescue_radius: f32 = 40.0;
 
 const maximum_screen_dimension: f32 =
     if (canvas_width > canvas_height)

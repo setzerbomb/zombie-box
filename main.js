@@ -2,7 +2,7 @@ const canvas = document.querySelector("#game");
 const context = canvas.getContext("2d");
 
 if (!context) {
-  throw new Error("Canvas 2D não está disponível.");
+  throw new Error("Canvas 2D is not available.");
 }
 
 let game = null;
@@ -20,7 +20,13 @@ const keyboard = {
 
 const challenge = {
   active: false,
+
+  // Word displayed on the canvas, including spaces.
   word: "",
+
+  // Word used for validation, without spaces.
+  inputWord: "",
+
   typed: "",
   timeLimit: 0,
   timeRemaining: 0,
@@ -33,7 +39,7 @@ async function loadGame() {
   });
 
   if (!response.ok) {
-    throw new Error(`Não foi possível carregar game.wasm: ${response.status}`);
+    throw new Error(`Could not load game.wasm: ${response.status}`);
   }
 
   const wasmBytes = await response.arrayBuffer();
@@ -49,24 +55,22 @@ async function loadWords() {
   });
 
   if (!response.ok) {
-    throw new Error(`Não foi possível carregar words.json: ${response.status}`);
+    throw new Error(`Could not load words.json: ${response.status}`);
   }
 
   const data = await response.json();
 
   if (!Array.isArray(data.words)) {
-    throw new Error(
-      "words.json precisa conter uma propriedade words com um array.",
-    );
+    throw new Error("words.json must contain a words property with an array.");
   }
 
   const loadedWords = data.words
     .filter((word) => typeof word === "string")
-    .map((word) => word.trim().toLocaleLowerCase("pt-BR"))
+    .map((word) => word.trim().toLocaleLowerCase("en-US"))
     .filter((word) => word.length > 0);
 
   if (loadedWords.length === 0) {
-    throw new Error("words.json não contém palavras válidas.");
+    throw new Error("words.json does not contain any valid words.");
   }
 
   return loadedWords;
@@ -83,6 +87,7 @@ function clearKeyboard() {
 function clearChallenge() {
   challenge.active = false;
   challenge.word = "";
+  challenge.inputWord = "";
   challenge.typed = "";
   challenge.timeLimit = 0;
   challenge.timeRemaining = 0;
@@ -113,9 +118,22 @@ function beginChallenge() {
 
   challenge.active = true;
   challenge.word = chooseWord();
+
+  /*
+   * The displayed word keeps its spaces.
+   * The validation word removes all whitespace.
+   *
+   * Example:
+   * word:      "roundhouse kick"
+   * inputWord: "roundhousekick"
+   */
+  challenge.inputWord = challenge.word.replace(/\s+/g, "");
+
   challenge.typed = "";
   challenge.timeLimit = game.getChallengeTimeLimit();
+
   challenge.timeRemaining = challenge.timeLimit;
+
   challenge.mistakeFlash = 0;
 }
 
@@ -126,6 +144,7 @@ function completeChallenge() {
 
   clearChallenge();
   game.resolveChallengeSuccess();
+
   previousTime = performance.now();
 }
 
@@ -152,6 +171,7 @@ function updateChallenge(deltaSeconds) {
   }
 
   challenge.timeRemaining -= deltaSeconds;
+
   challenge.mistakeFlash = Math.max(0, challenge.mistakeFlash - deltaSeconds);
 
   if (challenge.timeRemaining <= 0) {
@@ -172,13 +192,21 @@ function handleChallengeKey(event) {
     return;
   }
 
+  /*
+   * Space is not required and does not count
+   * as an incorrect character.
+   */
+  if (event.code === "Space" || event.key === " ") {
+    return;
+  }
+
   if (event.key.length !== 1) {
     return;
   }
 
-  const typedCharacter = event.key.toLocaleLowerCase("pt-BR");
+  const typedCharacter = event.key.toLocaleLowerCase("en-US");
 
-  const expectedCharacter = challenge.word[challenge.typed.length];
+  const expectedCharacter = challenge.inputWord[challenge.typed.length];
 
   if (typedCharacter !== expectedCharacter) {
     challenge.typed = "";
@@ -188,7 +216,7 @@ function handleChallengeKey(event) {
 
   challenge.typed += typedCharacter;
 
-  if (challenge.typed === challenge.word) {
+  if (challenge.typed === challenge.inputWord) {
     completeChallenge();
   }
 }
@@ -211,6 +239,10 @@ function togglePause() {
 }
 
 function restartGame() {
+  /*
+   * R must be treated as a regular letter
+   * while the quick-time event is active.
+   */
   if (challenge.active) {
     return;
   }
@@ -278,6 +310,10 @@ function setKeyState(event, pressed) {
 }
 
 window.addEventListener("keydown", (event) => {
+  /*
+   * Challenge input has priority over all
+   * game commands, including the R key.
+   */
   if (challenge.active) {
     handleChallengeKey(event);
     return;
@@ -345,7 +381,7 @@ const requiredExports = [
 for (const exportName of requiredExports) {
   if (typeof game[exportName] !== "function") {
     throw new Error(
-      `A função ${exportName} não foi exportada pelo módulo WASM.`,
+      `The function ${exportName} was not exported by the WASM module.`,
     );
   }
 }
@@ -407,6 +443,7 @@ function drawPlayer() {
 
 function drawZombies() {
   const maximum = game.getMaxZombies();
+
   const size = game.getZombieSize();
 
   context.fillStyle = "#ef4444";
@@ -427,6 +464,7 @@ function drawZombies() {
 
 function drawBullets() {
   const maximum = game.getMaxBullets();
+
   const size = game.getBulletSize();
 
   context.fillStyle = "#facc15";
@@ -451,18 +489,20 @@ function drawHud() {
 
   context.font = "bold 32px system-ui, sans-serif";
 
-  context.fillText(`Zombie Box — ${game.getScore()} pontos`, 30, 50);
+  context.fillText(`Zombie Box — ${game.getScore()} points`, 30, 50);
 
   context.font = "22px system-ui, sans-serif";
 
   context.fillText(
-    "WASD/Setas: mover | Espaço: atirar | Enter: pausar | R: reiniciar",
+    "WASD/Arrows: move | Space: shoot | Enter: pause | R: restart",
     30,
     85,
   );
 
   context.fillText(
-    `Salvamentos: ${game.getSuccessfulEscapes()} | Próximo desafio: ${game.getChallengeTimeLimit().toFixed(2)}s`,
+    `Escapes: ${game.getSuccessfulEscapes()} | Next challenge: ${game
+      .getChallengeTimeLimit()
+      .toFixed(2)}s`,
     30,
     120,
   );
@@ -480,19 +520,57 @@ function drawPause() {
   context.textAlign = "center";
 
   context.fillStyle = "#ffffff";
+
   context.font = "bold 90px system-ui, sans-serif";
 
-  context.fillText("PAUSADO", canvas.width / 2, canvas.height / 2);
+  context.fillText("PAUSED", canvas.width / 2, canvas.height / 2);
 
   context.font = "28px system-ui, sans-serif";
 
   context.fillText(
-    "Pressione Enter para continuar",
+    "Press Enter to continue",
     canvas.width / 2,
     canvas.height / 2 + 70,
   );
 
   context.textAlign = "left";
+}
+
+/*
+ * Converts the number of correctly typed letters
+ * into an index in the displayed text.
+ *
+ * Spaces are skipped automatically.
+ */
+function getTypedDisplayLength(displayWord, typedCharacterCount) {
+  let displayIndex = 0;
+  let typedLettersFound = 0;
+
+  while (
+    displayIndex < displayWord.length &&
+    typedLettersFound < typedCharacterCount
+  ) {
+    const character = displayWord[displayIndex];
+
+    if (!/\s/.test(character)) {
+      typedLettersFound += 1;
+    }
+
+    displayIndex += 1;
+  }
+
+  /*
+   * Include any whitespace that comes immediately
+   * after the last correctly typed character.
+   */
+  while (
+    displayIndex < displayWord.length &&
+    /\s/.test(displayWord[displayIndex])
+  ) {
+    displayIndex += 1;
+  }
+
+  return displayIndex;
 }
 
 function drawChallenge() {
@@ -512,24 +590,31 @@ function drawChallenge() {
 
   context.textAlign = "center";
   context.fillStyle = "#ef4444";
+
   context.font = "bold 52px system-ui, sans-serif";
 
-  context.fillText("ZUMBI AGARROU VOCÊ", centerX, centerY - 190);
+  context.fillText("A ZOMBIE GRABBED YOU", centerX, centerY - 190);
 
   context.fillStyle = "#ffffff";
+
   context.font = "28px system-ui, sans-serif";
 
   context.fillText(
-    "Digite o golpe antes que o tempo acabe",
+    "Type the technique before time runs out",
     centerX,
     centerY - 135,
   );
 
-  const displayWord = challenge.word.toLocaleUpperCase("pt-BR");
+  const displayWord = challenge.word.toLocaleUpperCase("en-US");
 
-  const typedDisplay = displayWord.slice(0, challenge.typed.length);
+  const typedDisplayLength = getTypedDisplayLength(
+    displayWord,
+    challenge.typed.length,
+  );
 
-  const remainingDisplay = displayWord.slice(challenge.typed.length);
+  const typedDisplay = displayWord.slice(0, typedDisplayLength);
+
+  const remainingDisplay = displayWord.slice(typedDisplayLength);
 
   context.font = "bold 64px monospace";
 
@@ -552,6 +637,7 @@ function drawChallenge() {
 
   const barHeight = 34;
   const barX = centerX - barWidth / 2;
+
   const barY = centerY + 45;
 
   const progress =
@@ -560,6 +646,7 @@ function drawChallenge() {
       : 0;
 
   context.fillStyle = "#1f2937";
+
   context.fillRect(barX, barY, barWidth, barHeight);
 
   context.fillStyle =
@@ -569,10 +656,12 @@ function drawChallenge() {
 
   context.strokeStyle = "#ffffff";
   context.lineWidth = 3;
+
   context.strokeRect(barX, barY, barWidth, barHeight);
 
   context.textAlign = "center";
   context.fillStyle = "#ffffff";
+
   context.font = "bold 28px system-ui, sans-serif";
 
   context.fillText(
@@ -583,17 +672,14 @@ function drawChallenge() {
 
   context.font = "22px system-ui, sans-serif";
 
-  context.fillText(
-    "Errou uma letra? A palavra recomeça do zero.",
-    centerX,
-    barY + 125,
-  );
+  context.fillText("A wrong letter resets the word.", centerX, barY + 125);
 
   if (challenge.mistakeFlash > 0) {
     context.fillStyle = "#ffffff";
+
     context.font = "bold 28px system-ui, sans-serif";
 
-    context.fillText("ERROU — RECOMECE", centerX, barY + 170);
+    context.fillText("WRONG — START AGAIN", centerX, barY + 170);
   }
 
   context.textAlign = "left";
@@ -609,19 +695,18 @@ function drawGameOver() {
   context.fillRect(0, 0, canvas.width, canvas.height);
 
   context.textAlign = "center";
-
   context.fillStyle = "#ef4444";
 
   context.font = "bold 90px system-ui, sans-serif";
 
-  context.fillText("VOCÊ MORREU", canvas.width / 2, canvas.height / 2 - 30);
+  context.fillText("YOU DIED", canvas.width / 2, canvas.height / 2 - 30);
 
   context.fillStyle = "#ffffff";
 
   context.font = "36px system-ui, sans-serif";
 
   context.fillText(
-    `${game.getScore()} pontos`,
+    `${game.getScore()} points`,
     canvas.width / 2,
     canvas.height / 2 + 40,
   );
@@ -629,7 +714,7 @@ function drawGameOver() {
   context.font = "28px system-ui, sans-serif";
 
   context.fillText(
-    "Pressione R para reiniciar",
+    "Press R to restart",
     canvas.width / 2,
     canvas.height / 2 + 100,
   );
