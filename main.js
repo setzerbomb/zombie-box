@@ -5,21 +5,24 @@ if (!context) {
   throw new Error("Canvas 2D não está disponível.");
 }
 
+let game = null;
+
 const keyboard = {
   left: false,
   right: false,
   up: false,
   down: false,
-};
-
-const mouse = {
-  x: canvas.width / 2,
-  y: canvas.height / 2,
   shooting: false,
 };
 
 async function loadGame() {
-  const response = await fetch("./wasm/zig-out/bin/game.wasm");
+  const response = await fetch("./wasm/zig-out/bin/game.wasm", {
+    /*
+     * Evita carregar um WASM antigo do cache
+     * durante o desenvolvimento.
+     */
+    cache: "no-store",
+  });
 
   if (!response.ok) {
     throw new Error(`Não foi possível carregar game.wasm: ${response.status}`);
@@ -30,18 +33,6 @@ async function loadGame() {
   const { instance } = await WebAssembly.instantiate(wasmBytes);
 
   return instance.exports;
-}
-
-function updateMousePosition(event) {
-  const bounds = canvas.getBoundingClientRect();
-
-  /*
-   * O canvas aparece no tamanho do navegador,
-   * mas internamente continua sendo 1920×1080.
-   */
-  mouse.x = (event.clientX - bounds.left) * (canvas.width / bounds.width);
-
-  mouse.y = (event.clientY - bounds.top) * (canvas.height / bounds.height);
 }
 
 function setKeyState(event, pressed) {
@@ -70,12 +61,18 @@ function setKeyState(event, pressed) {
       event.preventDefault();
       break;
 
+    case "Space":
+      keyboard.shooting = pressed;
+      event.preventDefault();
+      break;
+
     case "KeyR":
-      if (pressed) {
-        mouse.shooting = false;
+      if (pressed && game) {
+        keyboard.shooting = false;
         game.reset();
       }
 
+      event.preventDefault();
       break;
   }
 }
@@ -89,42 +86,21 @@ window.addEventListener("keyup", (event) => {
 });
 
 window.addEventListener("blur", () => {
+  /*
+   * Evita que alguma tecla fique presa quando
+   * o usuário troca de janela ou de aba.
+   */
   keyboard.left = false;
   keyboard.right = false;
   keyboard.up = false;
   keyboard.down = false;
-
-  mouse.shooting = false;
+  keyboard.shooting = false;
 });
 
-canvas.addEventListener("pointermove", (event) => {
-  updateMousePosition(event);
-});
-
-canvas.addEventListener("pointerdown", (event) => {
-  if (event.button !== 0) {
-    return;
-  }
-
-  updateMousePosition(event);
-  mouse.shooting = true;
-});
-
-window.addEventListener("pointerup", (event) => {
-  if (event.button === 0) {
-    mouse.shooting = false;
-  }
-});
-
-canvas.addEventListener("contextmenu", (event) => {
-  event.preventDefault();
-});
-
-const game = await loadGame();
+game = await loadGame();
 
 const requiredExports = [
   "setInput",
-  "setAim",
   "setShooting",
   "setSeed",
   "update",
@@ -134,6 +110,8 @@ const requiredExports = [
   "getPlayerY",
   "getPlayerWidth",
   "getPlayerHeight",
+  "getFacingX",
+  "getFacingY",
 
   "getMaxZombies",
   "isZombieActive",
@@ -183,14 +161,38 @@ function drawBackground() {
 }
 
 function drawPlayer() {
+  const x = game.getPlayerX();
+  const y = game.getPlayerY();
+
+  const width = game.getPlayerWidth();
+  const height = game.getPlayerHeight();
+
   context.fillStyle = "#22c55e";
 
-  context.fillRect(
-    game.getPlayerX(),
-    game.getPlayerY(),
-    game.getPlayerWidth(),
-    game.getPlayerHeight(),
-  );
+  context.fillRect(x, y, width, height);
+
+  /*
+   * Pequena linha mostrando para qual direção
+   * o jogador está olhando.
+   */
+  const centerX = x + width / 2;
+  const centerY = y + height / 2;
+
+  const facingX = game.getFacingX();
+  const facingY = game.getFacingY();
+
+  context.strokeStyle = "#ffffff";
+  context.lineWidth = 6;
+  context.lineCap = "round";
+
+  context.beginPath();
+  context.moveTo(centerX, centerY);
+
+  context.lineTo(centerX + facingX * 30, centerY + facingY * 30);
+
+  context.stroke();
+
+  context.lineCap = "butt";
 }
 
 function drawZombies() {
@@ -233,30 +235,17 @@ function drawBullets() {
   }
 }
 
-function drawCrosshair() {
-  context.strokeStyle = "#ffffff";
-  context.lineWidth = 3;
-
-  context.beginPath();
-  context.moveTo(mouse.x - 15, mouse.y);
-  context.lineTo(mouse.x + 15, mouse.y);
-  context.stroke();
-
-  context.beginPath();
-  context.moveTo(mouse.x, mouse.y - 15);
-  context.lineTo(mouse.x, mouse.y + 15);
-  context.stroke();
-}
-
 function drawHud() {
   context.fillStyle = "#ffffff";
+  context.textAlign = "left";
+
   context.font = "bold 32px system-ui, sans-serif";
 
   context.fillText(`Zombie Box — ${game.getScore()} pontos`, 30, 50);
 
   context.font = "22px system-ui, sans-serif";
 
-  context.fillText("WASD: mover | Mouse: mirar | Clique: atirar", 30, 85);
+  context.fillText("WASD ou setas: mover | Espaço: atirar", 30, 85);
 }
 
 function drawGameOver() {
@@ -271,11 +260,13 @@ function drawGameOver() {
   context.textAlign = "center";
 
   context.fillStyle = "#ef4444";
+
   context.font = "bold 90px system-ui, sans-serif";
 
   context.fillText("VOCÊ MORREU", canvas.width / 2, canvas.height / 2 - 30);
 
   context.fillStyle = "#ffffff";
+
   context.font = "36px system-ui, sans-serif";
 
   context.fillText(
@@ -292,7 +283,7 @@ function drawGameOver() {
     canvas.height / 2 + 100,
   );
 
-  context.textAlign = "start";
+  context.textAlign = "left";
 }
 
 function render() {
@@ -300,7 +291,6 @@ function render() {
   drawBullets();
   drawZombies();
   drawPlayer();
-  drawCrosshair();
   drawHud();
   drawGameOver();
 }
@@ -312,6 +302,10 @@ function gameLoop(currentTime) {
 
   previousTime = currentTime;
 
+  /*
+   * Impede saltos muito grandes caso o navegador
+   * pause temporariamente a execução da página.
+   */
   deltaSeconds = Math.min(deltaSeconds, 0.05);
 
   game.setInput(
@@ -321,9 +315,7 @@ function gameLoop(currentTime) {
     keyboard.down ? 1 : 0,
   );
 
-  game.setAim(mouse.x, mouse.y);
-
-  game.setShooting(mouse.shooting ? 1 : 0);
+  game.setShooting(keyboard.shooting ? 1 : 0);
 
   game.update(deltaSeconds);
 

@@ -41,10 +41,10 @@ var right_pressed: bool = false;
 var up_pressed: bool = false;
 var down_pressed: bool = false;
 
-var aim_x: f32 = canvas_width / 2.0;
-var aim_y: f32 = canvas_height / 2.0;
-
 var shooting: bool = false;
+
+var facing_x: f32 = 0.0;
+var facing_y: f32 = -1.0;
 
 var zombies: [max_zombies]Zombie = undefined;
 var bullets: [max_bullets]Bullet = undefined;
@@ -92,6 +92,18 @@ fn rectanglesOverlap(
         first_x + first_width > second_x and
         first_y < second_y + second_height and
         first_y + first_height > second_y;
+}
+
+fn clearZombies() void {
+    for (&zombies) |*zombie| {
+        zombie.* = .{};
+    }
+}
+
+fn clearBullets() void {
+    for (&bullets) |*bullet| {
+        bullet.* = .{};
+    }
 }
 
 fn spawnZombie() void {
@@ -154,43 +166,26 @@ fn spawnBullet() void {
     const player_center_y =
         player_y + player_height / 2.0;
 
-    const direction_x =
-        aim_x - player_center_x;
-
-    const direction_y =
-        aim_y - player_center_y;
-
-    const direction_length = @sqrt(
-        direction_x * direction_x +
-            direction_y * direction_y,
-    );
-
-    if (direction_length < 0.001) {
-        return;
-    }
-
-    const normalized_x =
-        direction_x / direction_length;
-
-    const normalized_y =
-        direction_y / direction_length;
-
     for (&bullets) |*bullet| {
         if (bullet.active) {
             continue;
         }
 
         bullet.x =
-            player_center_x - bullet_size / 2.0;
+            player_center_x +
+            facing_x * (player_width / 2.0) -
+            bullet_size / 2.0;
 
         bullet.y =
-            player_center_y - bullet_size / 2.0;
+            player_center_y +
+            facing_y * (player_height / 2.0) -
+            bullet_size / 2.0;
 
         bullet.velocity_x =
-            normalized_x * bullet_speed;
+            facing_x * bullet_speed;
 
         bullet.velocity_y =
-            normalized_y * bullet_speed;
+            facing_y * bullet_speed;
 
         bullet.active = true;
         return;
@@ -225,6 +220,9 @@ fn updatePlayer(delta_seconds: f32) void {
     if (axis_length > 0.0) {
         x_axis /= axis_length;
         y_axis /= axis_length;
+
+        facing_x = x_axis;
+        facing_y = y_axis;
     }
 
     player_x +=
@@ -267,10 +265,12 @@ fn updateBullets(delta_seconds: f32) void {
         }
 
         bullet.x +=
-            bullet.velocity_x * delta_seconds;
+            bullet.velocity_x *
+            delta_seconds;
 
         bullet.y +=
-            bullet.velocity_y * delta_seconds;
+            bullet.velocity_y *
+            delta_seconds;
 
         const outside_map =
             bullet.x + bullet_size < 0.0 or
@@ -369,20 +369,10 @@ fn updateZombies(delta_seconds: f32) void {
             zombie_size,
         )) {
             game_over = true;
+            shooting = false;
+
             return;
         }
-    }
-}
-
-fn clearZombies() void {
-    for (&zombies) |*zombie| {
-        zombie.* = .{};
-    }
-}
-
-fn clearBullets() void {
-    for (&bullets) |*bullet| {
-        bullet.* = .{};
     }
 }
 
@@ -393,8 +383,8 @@ fn resetGame() void {
     player_y =
         (canvas_height - player_height) / 2.0;
 
-    aim_x = canvas_width / 2.0;
-    aim_y = canvas_height / 2.0;
+    facing_x = 0.0;
+    facing_y = -1.0;
 
     left_pressed = false;
     right_pressed = false;
@@ -402,8 +392,8 @@ fn resetGame() void {
     down_pressed = false;
 
     shooting = false;
-    shooting_timer = 0.0;
 
+    shooting_timer = 0.0;
     zombie_spawn_timer = 0.5;
 
     score = 0;
@@ -425,11 +415,6 @@ export fn setInput(
     right_pressed = right != 0;
     up_pressed = up != 0;
     down_pressed = down != 0;
-}
-
-export fn setAim(x: f32, y: f32) void {
-    aim_x = x;
-    aim_y = y;
 }
 
 export fn setShooting(value: i32) void {
@@ -464,7 +449,6 @@ export fn update(delta_seconds: f32) void {
     if (shooting and shooting_timer <= 0.0) {
         spawnBullet();
 
-        // Aproximadamente seis tiros por segundo.
         shooting_timer = 0.16;
     }
 
@@ -473,7 +457,6 @@ export fn update(delta_seconds: f32) void {
     if (zombie_spawn_timer <= 0.0) {
         spawnZombie();
 
-        // Um zumbi por segundo.
         zombie_spawn_timer = 1.0;
     }
 
@@ -499,6 +482,14 @@ export fn getPlayerWidth() f32 {
 
 export fn getPlayerHeight() f32 {
     return player_height;
+}
+
+export fn getFacingX() f32 {
+    return facing_x;
+}
+
+export fn getFacingY() f32 {
+    return facing_y;
 }
 
 export fn getZombieSize() f32 {
