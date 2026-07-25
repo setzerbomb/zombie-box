@@ -6,6 +6,7 @@ if (!context) {
 }
 
 let game = null;
+let paused = false;
 
 const keyboard = {
   left: false,
@@ -17,10 +18,6 @@ const keyboard = {
 
 async function loadGame() {
   const response = await fetch("./wasm/zig-out/bin/game.wasm", {
-    /*
-     * Evita carregar um WASM antigo do cache
-     * durante o desenvolvimento.
-     */
     cache: "no-store",
   });
 
@@ -33,6 +30,29 @@ async function loadGame() {
   const { instance } = await WebAssembly.instantiate(wasmBytes);
 
   return instance.exports;
+}
+
+function clearKeyboard() {
+  keyboard.left = false;
+  keyboard.right = false;
+  keyboard.up = false;
+  keyboard.down = false;
+  keyboard.shooting = false;
+}
+
+function togglePause() {
+  paused = !paused;
+
+  /*
+   * Evita que uma tecla permaneça ativa quando
+   * o jogo for retomado.
+   */
+  if (paused) {
+    clearKeyboard();
+
+    game.setInput(0, 0, 0, 0);
+    game.setShooting(0);
+  }
 }
 
 function setKeyState(event, pressed) {
@@ -66,10 +86,28 @@ function setKeyState(event, pressed) {
       event.preventDefault();
       break;
 
+    case "Enter":
+    case "NumpadEnter":
+      /*
+       * event.repeat impediria o Enter segurado
+       * de pausar e despausar várias vezes.
+       */
+      if (pressed && !event.repeat && game) {
+        togglePause();
+      }
+
+      event.preventDefault();
+      break;
+
     case "KeyR":
-      if (pressed && game) {
-        keyboard.shooting = false;
+      if (pressed && !event.repeat && game) {
+        clearKeyboard();
+
+        paused = false;
+
         game.reset();
+        game.setInput(0, 0, 0, 0);
+        game.setShooting(0);
       }
 
       event.preventDefault();
@@ -86,15 +124,12 @@ window.addEventListener("keyup", (event) => {
 });
 
 window.addEventListener("blur", () => {
-  /*
-   * Evita que alguma tecla fique presa quando
-   * o usuário troca de janela ou de aba.
-   */
-  keyboard.left = false;
-  keyboard.right = false;
-  keyboard.up = false;
-  keyboard.down = false;
-  keyboard.shooting = false;
+  clearKeyboard();
+
+  if (game) {
+    game.setInput(0, 0, 0, 0);
+    game.setShooting(0);
+  }
 });
 
 game = await loadGame();
@@ -171,10 +206,6 @@ function drawPlayer() {
 
   context.fillRect(x, y, width, height);
 
-  /*
-   * Pequena linha mostrando para qual direção
-   * o jogador está olhando.
-   */
   const centerX = x + width / 2;
   const centerY = y + height / 2;
 
@@ -186,6 +217,7 @@ function drawPlayer() {
   context.lineCap = "round";
 
   context.beginPath();
+
   context.moveTo(centerX, centerY);
 
   context.lineTo(centerX + facingX * 30, centerY + facingY * 30);
@@ -245,7 +277,38 @@ function drawHud() {
 
   context.font = "22px system-ui, sans-serif";
 
-  context.fillText("WASD ou setas: mover | Espaço: atirar", 30, 85);
+  context.fillText(
+    "WASD/Setas: mover | Espaço: atirar | Enter: pausar",
+    30,
+    85,
+  );
+}
+
+function drawPause() {
+  if (!paused || game.getGameOver()) {
+    return;
+  }
+
+  context.fillStyle = "rgba(0, 0, 0, 0.68)";
+
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  context.textAlign = "center";
+
+  context.fillStyle = "#ffffff";
+  context.font = "bold 90px system-ui, sans-serif";
+
+  context.fillText("PAUSADO", canvas.width / 2, canvas.height / 2);
+
+  context.font = "28px system-ui, sans-serif";
+
+  context.fillText(
+    "Pressione Enter para continuar",
+    canvas.width / 2,
+    canvas.height / 2 + 70,
+  );
+
+  context.textAlign = "left";
 }
 
 function drawGameOver() {
@@ -292,6 +355,7 @@ function render() {
   drawZombies();
   drawPlayer();
   drawHud();
+  drawPause();
   drawGameOver();
 }
 
@@ -302,22 +366,24 @@ function gameLoop(currentTime) {
 
   previousTime = currentTime;
 
-  /*
-   * Impede saltos muito grandes caso o navegador
-   * pause temporariamente a execução da página.
-   */
   deltaSeconds = Math.min(deltaSeconds, 0.05);
 
-  game.setInput(
-    keyboard.left ? 1 : 0,
-    keyboard.right ? 1 : 0,
-    keyboard.up ? 1 : 0,
-    keyboard.down ? 1 : 0,
-  );
+  /*
+   * Enquanto pausado, o jogo continua sendo desenhado,
+   * mas o estado no Zig não é atualizado.
+   */
+  if (!paused) {
+    game.setInput(
+      keyboard.left ? 1 : 0,
+      keyboard.right ? 1 : 0,
+      keyboard.up ? 1 : 0,
+      keyboard.down ? 1 : 0,
+    );
 
-  game.setShooting(keyboard.shooting ? 1 : 0);
+    game.setShooting(keyboard.shooting ? 1 : 0);
 
-  game.update(deltaSeconds);
+    game.update(deltaSeconds);
+  }
 
   render();
 
