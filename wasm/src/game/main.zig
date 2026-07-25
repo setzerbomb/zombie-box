@@ -14,6 +14,12 @@ const bullet_speed: f32 = 900.0;
 const max_zombies: usize = 64;
 const max_bullets: usize = 128;
 
+const rescue_radius: f32 = 40.0;
+const rescue_invulnerability_time: f32 = 0.25;
+
+const initial_challenge_time: f32 = 5.0;
+const challenge_decay_rate: f32 = 0.12;
+
 const Zombie = struct {
     x: f32 = 0.0,
     y: f32 = 0.0,
@@ -53,9 +59,13 @@ var initialized: bool = false;
 
 var zombie_spawn_timer: f32 = 0.5;
 var shooting_timer: f32 = 0.0;
+var invulnerability_timer: f32 = 0.0;
 
 var score: u32 = 0;
 var game_over: bool = false;
+
+var challenge_active: bool = false;
+var successful_escapes: u32 = 0;
 
 var random_state: u32 = 0x12345678;
 
@@ -76,6 +86,14 @@ fn randomFloat() f32 {
 
     return @as(f32, @floatFromInt(value)) /
         16777216.0;
+}
+
+fn getChallengeTimeLimitInternal() f32 {
+    const escapes: f32 =
+        @floatFromInt(successful_escapes);
+
+    return initial_challenge_time *
+        @exp(-challenge_decay_rate * escapes);
 }
 
 fn rectanglesOverlap(
@@ -115,7 +133,6 @@ fn spawnZombie() void {
         const edge = randomU32() % 4;
 
         switch (edge) {
-            // Borda superior
             0 => {
                 zombie.x =
                     randomFloat() *
@@ -123,8 +140,6 @@ fn spawnZombie() void {
 
                 zombie.y = 0.0;
             },
-
-            // Borda direita
             1 => {
                 zombie.x =
                     canvas_width - zombie_size;
@@ -133,8 +148,6 @@ fn spawnZombie() void {
                     randomFloat() *
                     (canvas_height - zombie_size);
             },
-
-            // Borda inferior
             2 => {
                 zombie.x =
                     randomFloat() *
@@ -143,8 +156,6 @@ fn spawnZombie() void {
                 zombie.y =
                     canvas_height - zombie_size;
             },
-
-            // Borda esquerda
             else => {
                 zombie.x = 0.0;
 
@@ -358,6 +369,10 @@ fn updateZombies(delta_seconds: f32) void {
             continue;
         }
 
+        if (invulnerability_timer > 0.0) {
+            continue;
+        }
+
         if (rectanglesOverlap(
             player_x,
             player_y,
@@ -368,10 +383,55 @@ fn updateZombies(delta_seconds: f32) void {
             zombie_size,
             zombie_size,
         )) {
-            game_over = true;
+            challenge_active = true;
             shooting = false;
-
             return;
+        }
+    }
+}
+
+fn killZombiesNearPlayer() void {
+    const player_right =
+        player_x + player_width;
+
+    const player_bottom =
+        player_y + player_height;
+
+    const rescue_radius_squared =
+        rescue_radius * rescue_radius;
+
+    for (&zombies) |*zombie| {
+        if (!zombie.active) {
+            continue;
+        }
+
+        const zombie_right =
+            zombie.x + zombie_size;
+
+        const zombie_bottom =
+            zombie.y + zombie_size;
+
+        var distance_x: f32 = 0.0;
+        var distance_y: f32 = 0.0;
+
+        if (zombie.x > player_right) {
+            distance_x = zombie.x - player_right;
+        } else if (player_x > zombie_right) {
+            distance_x = player_x - zombie_right;
+        }
+
+        if (zombie.y > player_bottom) {
+            distance_y = zombie.y - player_bottom;
+        } else if (player_y > zombie_bottom) {
+            distance_y = player_y - zombie_bottom;
+        }
+
+        const distance_squared =
+            distance_x * distance_x +
+            distance_y * distance_y;
+
+        if (distance_squared <= rescue_radius_squared) {
+            zombie.active = false;
         }
     }
 }
@@ -395,9 +455,13 @@ fn resetGame() void {
 
     shooting_timer = 0.0;
     zombie_spawn_timer = 0.5;
+    invulnerability_timer = 0.0;
 
     score = 0;
     game_over = false;
+
+    challenge_active = false;
+    successful_escapes = 0;
 
     clearZombies();
     clearBullets();
@@ -433,7 +497,7 @@ export fn update(delta_seconds: f32) void {
         resetGame();
     }
 
-    if (game_over) {
+    if (game_over or challenge_active) {
         return;
     }
 
@@ -442,13 +506,20 @@ export fn update(delta_seconds: f32) void {
     else
         delta_seconds;
 
+    if (invulnerability_timer > 0.0) {
+        invulnerability_timer -= delta;
+
+        if (invulnerability_timer < 0.0) {
+            invulnerability_timer = 0.0;
+        }
+    }
+
     updatePlayer(delta);
 
     shooting_timer -= delta;
 
     if (shooting and shooting_timer <= 0.0) {
         spawnBullet();
-
         shooting_timer = 0.16;
     }
 
@@ -456,7 +527,6 @@ export fn update(delta_seconds: f32) void {
 
     if (zombie_spawn_timer <= 0.0) {
         spawnZombie();
-
         zombie_spawn_timer = 1.0;
     }
 
@@ -466,6 +536,29 @@ export fn update(delta_seconds: f32) void {
 
 export fn reset() void {
     resetGame();
+}
+
+export fn resolveChallengeSuccess() void {
+    if (!challenge_active or game_over) {
+        return;
+    }
+
+    killZombiesNearPlayer();
+
+    successful_escapes += 1;
+    challenge_active = false;
+    invulnerability_timer =
+        rescue_invulnerability_time;
+}
+
+export fn resolveChallengeFailure() void {
+    if (!challenge_active or game_over) {
+        return;
+    }
+
+    challenge_active = false;
+    game_over = true;
+    shooting = false;
 }
 
 export fn getPlayerX() f32 {
@@ -610,4 +703,16 @@ export fn getScore() u32 {
 
 export fn getGameOver() i32 {
     return if (game_over) 1 else 0;
+}
+
+export fn getChallengeActive() i32 {
+    return if (challenge_active) 1 else 0;
+}
+
+export fn getChallengeTimeLimit() f32 {
+    return getChallengeTimeLimitInternal();
+}
+
+export fn getSuccessfulEscapes() u32 {
+    return successful_escapes;
 }

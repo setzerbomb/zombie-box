@@ -7,6 +7,8 @@ if (!context) {
 
 let game = null;
 let paused = false;
+let words = [];
+let lastWord = null;
 
 const keyboard = {
   left: false,
@@ -14,6 +16,15 @@ const keyboard = {
   up: false,
   down: false,
   shooting: false,
+};
+
+const challenge = {
+  active: false,
+  word: "",
+  typed: "",
+  timeLimit: 0,
+  timeRemaining: 0,
+  mistakeFlash: 0,
 };
 
 async function loadGame() {
@@ -32,6 +43,35 @@ async function loadGame() {
   return instance.exports;
 }
 
+async function loadWords() {
+  const response = await fetch("./words.json", {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Não foi possível carregar words.json: ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  if (!Array.isArray(data.words)) {
+    throw new Error(
+      "words.json precisa conter uma propriedade words com um array.",
+    );
+  }
+
+  const loadedWords = data.words
+    .filter((word) => typeof word === "string")
+    .map((word) => word.trim().toLocaleLowerCase("pt-BR"))
+    .filter((word) => word.length > 0);
+
+  if (loadedWords.length === 0) {
+    throw new Error("words.json não contém palavras válidas.");
+  }
+
+  return loadedWords;
+}
+
 function clearKeyboard() {
   keyboard.left = false;
   keyboard.right = false;
@@ -40,19 +80,151 @@ function clearKeyboard() {
   keyboard.shooting = false;
 }
 
+function clearChallenge() {
+  challenge.active = false;
+  challenge.word = "";
+  challenge.typed = "";
+  challenge.timeLimit = 0;
+  challenge.timeRemaining = 0;
+  challenge.mistakeFlash = 0;
+}
+
+function chooseWord() {
+  if (words.length === 1) {
+    return words[0];
+  }
+
+  let selectedWord = words[Math.floor(Math.random() * words.length)];
+
+  while (selectedWord === lastWord) {
+    selectedWord = words[Math.floor(Math.random() * words.length)];
+  }
+
+  lastWord = selectedWord;
+
+  return selectedWord;
+}
+
+function beginChallenge() {
+  clearKeyboard();
+
+  game.setInput(0, 0, 0, 0);
+  game.setShooting(0);
+
+  challenge.active = true;
+  challenge.word = chooseWord();
+  challenge.typed = "";
+  challenge.timeLimit = game.getChallengeTimeLimit();
+  challenge.timeRemaining = challenge.timeLimit;
+  challenge.mistakeFlash = 0;
+}
+
+function completeChallenge() {
+  if (!challenge.active) {
+    return;
+  }
+
+  clearChallenge();
+  game.resolveChallengeSuccess();
+  previousTime = performance.now();
+}
+
+function failChallenge() {
+  if (!challenge.active) {
+    return;
+  }
+
+  clearChallenge();
+  game.resolveChallengeFailure();
+}
+
+function syncChallengeState() {
+  const wasmChallengeActive = game.getChallengeActive() !== 0;
+
+  if (wasmChallengeActive && !challenge.active) {
+    beginChallenge();
+  }
+}
+
+function updateChallenge(deltaSeconds) {
+  if (!challenge.active) {
+    return;
+  }
+
+  challenge.timeRemaining -= deltaSeconds;
+  challenge.mistakeFlash = Math.max(0, challenge.mistakeFlash - deltaSeconds);
+
+  if (challenge.timeRemaining <= 0) {
+    challenge.timeRemaining = 0;
+    failChallenge();
+  }
+}
+
+function handleChallengeKey(event) {
+  event.preventDefault();
+
+  if (!challenge.active || event.repeat) {
+    return;
+  }
+
+  if (event.code === "Backspace") {
+    challenge.typed = "";
+    return;
+  }
+
+  if (event.key.length !== 1) {
+    return;
+  }
+
+  const typedCharacter = event.key.toLocaleLowerCase("pt-BR");
+
+  const expectedCharacter = challenge.word[challenge.typed.length];
+
+  if (typedCharacter !== expectedCharacter) {
+    challenge.typed = "";
+    challenge.mistakeFlash = 0.22;
+    return;
+  }
+
+  challenge.typed += typedCharacter;
+
+  if (challenge.typed === challenge.word) {
+    completeChallenge();
+  }
+}
+
 function togglePause() {
+  if (challenge.active || game.getGameOver()) {
+    return;
+  }
+
   paused = !paused;
 
-  /*
-   * Evita que uma tecla permaneça ativa quando
-   * o jogo for retomado.
-   */
   if (paused) {
     clearKeyboard();
 
     game.setInput(0, 0, 0, 0);
     game.setShooting(0);
+  } else {
+    previousTime = performance.now();
   }
+}
+
+function restartGame() {
+  if (challenge.active) {
+    return;
+  }
+
+  clearKeyboard();
+  clearChallenge();
+
+  paused = false;
+
+  game.reset();
+  game.setInput(0, 0, 0, 0);
+  game.setShooting(0);
+
+  previousTime = performance.now();
 }
 
 function setKeyState(event, pressed) {
@@ -88,10 +260,6 @@ function setKeyState(event, pressed) {
 
     case "Enter":
     case "NumpadEnter":
-      /*
-       * event.repeat impediria o Enter segurado
-       * de pausar e despausar várias vezes.
-       */
       if (pressed && !event.repeat && game) {
         togglePause();
       }
@@ -101,13 +269,7 @@ function setKeyState(event, pressed) {
 
     case "KeyR":
       if (pressed && !event.repeat && game) {
-        clearKeyboard();
-
-        paused = false;
-
-        game.reset();
-        game.setInput(0, 0, 0, 0);
-        game.setShooting(0);
+        restartGame();
       }
 
       event.preventDefault();
@@ -116,10 +278,20 @@ function setKeyState(event, pressed) {
 }
 
 window.addEventListener("keydown", (event) => {
+  if (challenge.active) {
+    handleChallengeKey(event);
+    return;
+  }
+
   setKeyState(event, true);
 });
 
 window.addEventListener("keyup", (event) => {
+  if (challenge.active) {
+    event.preventDefault();
+    return;
+  }
+
   setKeyState(event, false);
 });
 
@@ -132,7 +304,7 @@ window.addEventListener("blur", () => {
   }
 });
 
-game = await loadGame();
+[game, words] = await Promise.all([loadGame(), loadWords()]);
 
 const requiredExports = [
   "setInput",
@@ -162,6 +334,12 @@ const requiredExports = [
 
   "getScore",
   "getGameOver",
+
+  "getChallengeActive",
+  "getChallengeTimeLimit",
+  "getSuccessfulEscapes",
+  "resolveChallengeSuccess",
+  "resolveChallengeFailure",
 ];
 
 for (const exportName of requiredExports) {
@@ -278,14 +456,20 @@ function drawHud() {
   context.font = "22px system-ui, sans-serif";
 
   context.fillText(
-    "WASD/Setas: mover | Espaço: atirar | Enter: pausar",
+    "WASD/Setas: mover | Espaço: atirar | Enter: pausar | R: reiniciar",
     30,
     85,
+  );
+
+  context.fillText(
+    `Salvamentos: ${game.getSuccessfulEscapes()} | Próximo desafio: ${game.getChallengeTimeLimit().toFixed(2)}s`,
+    30,
+    120,
   );
 }
 
 function drawPause() {
-  if (!paused || game.getGameOver()) {
+  if (!paused || challenge.active || game.getGameOver()) {
     return;
   }
 
@@ -307,6 +491,110 @@ function drawPause() {
     canvas.width / 2,
     canvas.height / 2 + 70,
   );
+
+  context.textAlign = "left";
+}
+
+function drawChallenge() {
+  if (!challenge.active) {
+    return;
+  }
+
+  context.fillStyle =
+    challenge.mistakeFlash > 0
+      ? "rgba(127, 29, 29, 0.84)"
+      : "rgba(0, 0, 0, 0.82)";
+
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  const centerX = canvas.width / 2;
+  const centerY = canvas.height / 2;
+
+  context.textAlign = "center";
+  context.fillStyle = "#ef4444";
+  context.font = "bold 52px system-ui, sans-serif";
+
+  context.fillText("ZUMBI AGARROU VOCÊ", centerX, centerY - 190);
+
+  context.fillStyle = "#ffffff";
+  context.font = "28px system-ui, sans-serif";
+
+  context.fillText(
+    "Digite o golpe antes que o tempo acabe",
+    centerX,
+    centerY - 135,
+  );
+
+  const displayWord = challenge.word.toLocaleUpperCase("pt-BR");
+
+  const typedDisplay = displayWord.slice(0, challenge.typed.length);
+
+  const remainingDisplay = displayWord.slice(challenge.typed.length);
+
+  context.font = "bold 64px monospace";
+
+  const fullWidth = context.measureText(displayWord).width;
+
+  const typedWidth = context.measureText(typedDisplay).width;
+
+  const wordStartX = centerX - fullWidth / 2;
+
+  context.textAlign = "left";
+  context.fillStyle = "#22c55e";
+
+  context.fillText(typedDisplay, wordStartX, centerY - 35);
+
+  context.fillStyle = "#ffffff";
+
+  context.fillText(remainingDisplay, wordStartX + typedWidth, centerY - 35);
+
+  const barWidth = Math.min(760, canvas.width - 160);
+
+  const barHeight = 34;
+  const barX = centerX - barWidth / 2;
+  const barY = centerY + 45;
+
+  const progress =
+    challenge.timeLimit > 0
+      ? Math.max(0, Math.min(1, challenge.timeRemaining / challenge.timeLimit))
+      : 0;
+
+  context.fillStyle = "#1f2937";
+  context.fillRect(barX, barY, barWidth, barHeight);
+
+  context.fillStyle =
+    progress > 0.5 ? "#22c55e" : progress > 0.25 ? "#facc15" : "#ef4444";
+
+  context.fillRect(barX, barY, barWidth * progress, barHeight);
+
+  context.strokeStyle = "#ffffff";
+  context.lineWidth = 3;
+  context.strokeRect(barX, barY, barWidth, barHeight);
+
+  context.textAlign = "center";
+  context.fillStyle = "#ffffff";
+  context.font = "bold 28px system-ui, sans-serif";
+
+  context.fillText(
+    `${challenge.timeRemaining.toFixed(2)}s`,
+    centerX,
+    barY + 82,
+  );
+
+  context.font = "22px system-ui, sans-serif";
+
+  context.fillText(
+    "Errou uma letra? A palavra recomeça do zero.",
+    centerX,
+    barY + 125,
+  );
+
+  if (challenge.mistakeFlash > 0) {
+    context.fillStyle = "#ffffff";
+    context.font = "bold 28px system-ui, sans-serif";
+
+    context.fillText("ERROU — RECOMECE", centerX, barY + 170);
+  }
 
   context.textAlign = "left";
 }
@@ -356,6 +644,7 @@ function render() {
   drawPlayer();
   drawHud();
   drawPause();
+  drawChallenge();
   drawGameOver();
 }
 
@@ -368,11 +657,9 @@ function gameLoop(currentTime) {
 
   deltaSeconds = Math.min(deltaSeconds, 0.05);
 
-  /*
-   * Enquanto pausado, o jogo continua sendo desenhado,
-   * mas o estado no Zig não é atualizado.
-   */
-  if (!paused) {
+  if (challenge.active) {
+    updateChallenge(deltaSeconds);
+  } else if (!paused) {
     game.setInput(
       keyboard.left ? 1 : 0,
       keyboard.right ? 1 : 0,
@@ -383,6 +670,7 @@ function gameLoop(currentTime) {
     game.setShooting(keyboard.shooting ? 1 : 0);
 
     game.update(deltaSeconds);
+    syncChallengeState();
   }
 
   render();
