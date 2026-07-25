@@ -3,18 +3,42 @@ const canvas_height: f32 = 1080.0;
 
 const player_width: f32 = 40.0;
 const player_height: f32 = 40.0;
-const player_speed: f32 = 320.0 * 1.5;
+const base_player_speed: f32 = 320.0;
+
+const initial_player_speed_multiplier: f32 = 1.0;
+const player_speed_multiplier_increase: f32 = 0.025;
+const kills_per_speed_cycle: u32 = 10;
+const maximum_player_speed_multiplier: f32 = 1.5;
 
 const zombie_size: f32 = 40.0;
-const zombie_speed: f32 = 130.0;
+const zombie_speed: f32 = 150.0;
 
 const bullet_size: f32 = 8.0;
 const bullet_speed: f32 = 900.0;
 
-const max_zombies: usize = 64;
+const max_zombies: usize = 128;
 const max_bullets: usize = 128;
 
-const rescue_radius: f32 = 40.0;
+const initial_spawn_interval: f32 = 1.0;
+const minimum_spawn_interval: f32 = 0.5;
+const spawn_interval_decrease: f32 = 0.1;
+const spawn_decay_period: f32 = 30.0;
+
+const initial_rescue_radius: f32 = 60.0;
+
+const maximum_screen_dimension: f32 =
+    if (canvas_width > canvas_height)
+        canvas_width
+    else
+        canvas_height;
+
+const maximum_rescue_radius: f32 =
+    maximum_screen_dimension / 2.0;
+
+const rescue_sigmoid_steepness: f32 = 0.0383;
+const rescue_sigmoid_midpoint_kills: f32 = 120.0;
+const rescue_radius_max_kills: u32 = 240;
+
 const rescue_invulnerability_time: f32 = 0.25;
 
 const initial_challenge_time: f32 = 5.0;
@@ -60,6 +84,7 @@ var initialized: bool = false;
 var zombie_spawn_timer: f32 = 0.5;
 var shooting_timer: f32 = 0.0;
 var invulnerability_timer: f32 = 0.0;
+var game_elapsed_time: f32 = 0.0;
 
 var score: u32 = 0;
 var game_over: bool = false;
@@ -94,6 +119,73 @@ fn getChallengeTimeLimitInternal() f32 {
 
     return initial_challenge_time *
         @exp(-challenge_decay_rate * escapes);
+}
+
+fn sigmoid(value: f32) f32 {
+    return 1.0 / (1.0 + @exp(-value));
+}
+
+fn getRescueRadiusInternal() f32 {
+    if (score >= rescue_radius_max_kills) {
+        return maximum_rescue_radius;
+    }
+
+    const kills: f32 = @floatFromInt(score);
+
+    const initial_sigmoid = sigmoid(
+        rescue_sigmoid_steepness *
+            (0.0 - rescue_sigmoid_midpoint_kills),
+    );
+
+    const current_sigmoid = sigmoid(
+        rescue_sigmoid_steepness *
+            (kills - rescue_sigmoid_midpoint_kills),
+    );
+
+    var progress =
+        (current_sigmoid - initial_sigmoid) /
+        (1.0 - initial_sigmoid);
+
+    if (progress < 0.0) {
+        progress = 0.0;
+    }
+
+    if (progress > 1.0) {
+        progress = 1.0;
+    }
+
+    return initial_rescue_radius +
+        (maximum_rescue_radius - initial_rescue_radius) *
+            progress;
+}
+
+fn getPlayerSpeedMultiplierInternal() f32 {
+    const cycles = score / kills_per_speed_cycle;
+    const cycles_float: f32 = @floatFromInt(cycles);
+
+    const multiplier =
+        initial_player_speed_multiplier +
+        cycles_float * player_speed_multiplier_increase;
+
+    return if (multiplier > maximum_player_speed_multiplier)
+        maximum_player_speed_multiplier
+    else
+        multiplier;
+}
+
+fn getSpawnIntervalInternal() f32 {
+    const completed_periods = @floor(
+        game_elapsed_time / spawn_decay_period,
+    );
+
+    const interval =
+        initial_spawn_interval -
+        completed_periods * spawn_interval_decrease;
+
+    return if (interval < minimum_spawn_interval)
+        minimum_spawn_interval
+    else
+        interval;
 }
 
 fn rectanglesOverlap(
@@ -235,6 +327,10 @@ fn updatePlayer(delta_seconds: f32) void {
         facing_x = x_axis;
         facing_y = y_axis;
     }
+
+    const player_speed =
+        base_player_speed *
+        getPlayerSpeedMultiplierInternal();
 
     player_x +=
         x_axis *
@@ -397,6 +493,9 @@ fn killZombiesNearPlayer() void {
     const player_bottom =
         player_y + player_height;
 
+    const rescue_radius =
+        getRescueRadiusInternal();
+
     const rescue_radius_squared =
         rescue_radius * rescue_radius;
 
@@ -432,6 +531,7 @@ fn killZombiesNearPlayer() void {
 
         if (distance_squared <= rescue_radius_squared) {
             zombie.active = false;
+            score += 1;
         }
     }
 }
@@ -456,6 +556,7 @@ fn resetGame() void {
     shooting_timer = 0.0;
     zombie_spawn_timer = 0.5;
     invulnerability_timer = 0.0;
+    game_elapsed_time = 0.0;
 
     score = 0;
     game_over = false;
@@ -514,6 +615,8 @@ export fn update(delta_seconds: f32) void {
         }
     }
 
+    game_elapsed_time += delta;
+
     updatePlayer(delta);
 
     shooting_timer -= delta;
@@ -527,7 +630,7 @@ export fn update(delta_seconds: f32) void {
 
     if (zombie_spawn_timer <= 0.0) {
         spawnZombie();
-        zombie_spawn_timer = 1.0;
+        zombie_spawn_timer = getSpawnIntervalInternal();
     }
 
     updateBullets(delta);
@@ -699,6 +802,18 @@ export fn getBulletY(index: i32) f32 {
 
 export fn getScore() u32 {
     return score;
+}
+
+export fn getRescueRadius() f32 {
+    return getRescueRadiusInternal();
+}
+
+export fn getPlayerSpeedMultiplier() f32 {
+    return getPlayerSpeedMultiplierInternal();
+}
+
+export fn getSpawnInterval() f32 {
+    return getSpawnIntervalInternal();
 }
 
 export fn getGameOver() i32 {
