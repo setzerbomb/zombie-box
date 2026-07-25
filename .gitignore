@@ -1,0 +1,3 @@
+wasm/zig-out
+wasm/.zig-cache
+wasm/build-error.log

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>Zombie Box</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            min-height: 100vh;
+            margin: 0;
+            display: grid;
+            place-items: center;
+            background: #111827;
+            color: #f9fafb;
+            font-family: system-ui, sans-serif;
+        }
+
+        main {
+            text-align: center;
+        }
+
+        canvas {
+            display: block;
+            border: 2px solid #4b5563;
+            background: #030712;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        p {
+            margin-bottom: 12px;
+        }
+
+        button {
+            margin-top: 16px;
+            padding: 8px 16px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body>
+    <main>
+        <canvas
+            width="1920" height="1080"
+            id="game"
+        ></canvas>
+    </main>
+
+    <script type="module" src="./main.js"></script>
+</body>
+</html>

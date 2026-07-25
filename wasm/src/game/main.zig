@@ -1,0 +1,622 @@
+const canvas_width: f32 = 1920.0;
+const canvas_height: f32 = 1080.0;
+
+const player_width: f32 = 40.0;
+const player_height: f32 = 40.0;
+const player_speed: f32 = 320.0 * 1.5;
+
+const zombie_size: f32 = 40.0;
+const zombie_speed: f32 = 130.0;
+
+const bullet_size: f32 = 8.0;
+const bullet_speed: f32 = 900.0;
+
+const max_zombies: usize = 64;
+const max_bullets: usize = 128;
+
+const Zombie = struct {
+    x: f32 = 0.0,
+    y: f32 = 0.0,
+    active: bool = false,
+};
+
+const Bullet = struct {
+    x: f32 = 0.0,
+    y: f32 = 0.0,
+
+    velocity_x: f32 = 0.0,
+    velocity_y: f32 = 0.0,
+
+    active: bool = false,
+};
+
+var player_x: f32 =
+    (canvas_width - player_width) / 2.0;
+
+var player_y: f32 =
+    (canvas_height - player_height) / 2.0;
+
+var left_pressed: bool = false;
+var right_pressed: bool = false;
+var up_pressed: bool = false;
+var down_pressed: bool = false;
+
+var aim_x: f32 = canvas_width / 2.0;
+var aim_y: f32 = canvas_height / 2.0;
+
+var shooting: bool = false;
+
+var zombies: [max_zombies]Zombie = undefined;
+var bullets: [max_bullets]Bullet = undefined;
+
+var initialized: bool = false;
+
+var zombie_spawn_timer: f32 = 0.5;
+var shooting_timer: f32 = 0.0;
+
+var score: u32 = 0;
+var game_over: bool = false;
+
+var random_state: u32 = 0x12345678;
+
+fn randomU32() u32 {
+    var value = random_state;
+
+    value ^= value << 13;
+    value ^= value >> 17;
+    value ^= value << 5;
+
+    random_state = value;
+
+    return value;
+}
+
+fn randomFloat() f32 {
+    const value = randomU32() & 0x00FFFFFF;
+
+    return @as(f32, @floatFromInt(value)) /
+        16777216.0;
+}
+
+fn rectanglesOverlap(
+    first_x: f32,
+    first_y: f32,
+    first_width: f32,
+    first_height: f32,
+    second_x: f32,
+    second_y: f32,
+    second_width: f32,
+    second_height: f32,
+) bool {
+    return first_x < second_x + second_width and
+        first_x + first_width > second_x and
+        first_y < second_y + second_height and
+        first_y + first_height > second_y;
+}
+
+fn spawnZombie() void {
+    for (&zombies) |*zombie| {
+        if (zombie.active) {
+            continue;
+        }
+
+        const edge = randomU32() % 4;
+
+        switch (edge) {
+            // Borda superior
+            0 => {
+                zombie.x =
+                    randomFloat() *
+                    (canvas_width - zombie_size);
+
+                zombie.y = 0.0;
+            },
+
+            // Borda direita
+            1 => {
+                zombie.x =
+                    canvas_width - zombie_size;
+
+                zombie.y =
+                    randomFloat() *
+                    (canvas_height - zombie_size);
+            },
+
+            // Borda inferior
+            2 => {
+                zombie.x =
+                    randomFloat() *
+                    (canvas_width - zombie_size);
+
+                zombie.y =
+                    canvas_height - zombie_size;
+            },
+
+            // Borda esquerda
+            else => {
+                zombie.x = 0.0;
+
+                zombie.y =
+                    randomFloat() *
+                    (canvas_height - zombie_size);
+            },
+        }
+
+        zombie.active = true;
+        return;
+    }
+}
+
+fn spawnBullet() void {
+    const player_center_x =
+        player_x + player_width / 2.0;
+
+    const player_center_y =
+        player_y + player_height / 2.0;
+
+    const direction_x =
+        aim_x - player_center_x;
+
+    const direction_y =
+        aim_y - player_center_y;
+
+    const direction_length = @sqrt(
+        direction_x * direction_x +
+            direction_y * direction_y,
+    );
+
+    if (direction_length < 0.001) {
+        return;
+    }
+
+    const normalized_x =
+        direction_x / direction_length;
+
+    const normalized_y =
+        direction_y / direction_length;
+
+    for (&bullets) |*bullet| {
+        if (bullet.active) {
+            continue;
+        }
+
+        bullet.x =
+            player_center_x - bullet_size / 2.0;
+
+        bullet.y =
+            player_center_y - bullet_size / 2.0;
+
+        bullet.velocity_x =
+            normalized_x * bullet_speed;
+
+        bullet.velocity_y =
+            normalized_y * bullet_speed;
+
+        bullet.active = true;
+        return;
+    }
+}
+
+fn updatePlayer(delta_seconds: f32) void {
+    var x_axis: f32 = 0.0;
+    var y_axis: f32 = 0.0;
+
+    if (left_pressed) {
+        x_axis -= 1.0;
+    }
+
+    if (right_pressed) {
+        x_axis += 1.0;
+    }
+
+    if (up_pressed) {
+        y_axis -= 1.0;
+    }
+
+    if (down_pressed) {
+        y_axis += 1.0;
+    }
+
+    const axis_length = @sqrt(
+        x_axis * x_axis +
+            y_axis * y_axis,
+    );
+
+    if (axis_length > 0.0) {
+        x_axis /= axis_length;
+        y_axis /= axis_length;
+    }
+
+    player_x +=
+        x_axis *
+        player_speed *
+        delta_seconds;
+
+    player_y +=
+        y_axis *
+        player_speed *
+        delta_seconds;
+
+    if (player_x < 0.0) {
+        player_x = 0.0;
+    }
+
+    const maximum_x =
+        canvas_width - player_width;
+
+    if (player_x > maximum_x) {
+        player_x = maximum_x;
+    }
+
+    if (player_y < 0.0) {
+        player_y = 0.0;
+    }
+
+    const maximum_y =
+        canvas_height - player_height;
+
+    if (player_y > maximum_y) {
+        player_y = maximum_y;
+    }
+}
+
+fn updateBullets(delta_seconds: f32) void {
+    for (&bullets) |*bullet| {
+        if (!bullet.active) {
+            continue;
+        }
+
+        bullet.x +=
+            bullet.velocity_x * delta_seconds;
+
+        bullet.y +=
+            bullet.velocity_y * delta_seconds;
+
+        const outside_map =
+            bullet.x + bullet_size < 0.0 or
+            bullet.y + bullet_size < 0.0 or
+            bullet.x > canvas_width or
+            bullet.y > canvas_height;
+
+        if (outside_map) {
+            bullet.active = false;
+        }
+    }
+}
+
+fn updateZombies(delta_seconds: f32) void {
+    const player_center_x =
+        player_x + player_width / 2.0;
+
+    const player_center_y =
+        player_y + player_height / 2.0;
+
+    for (&zombies) |*zombie| {
+        if (!zombie.active) {
+            continue;
+        }
+
+        const zombie_center_x =
+            zombie.x + zombie_size / 2.0;
+
+        const zombie_center_y =
+            zombie.y + zombie_size / 2.0;
+
+        const direction_x =
+            player_center_x - zombie_center_x;
+
+        const direction_y =
+            player_center_y - zombie_center_y;
+
+        const distance = @sqrt(
+            direction_x * direction_x +
+                direction_y * direction_y,
+        );
+
+        if (distance > 0.001) {
+            zombie.x +=
+                direction_x /
+                distance *
+                zombie_speed *
+                delta_seconds;
+
+            zombie.y +=
+                direction_y /
+                distance *
+                zombie_speed *
+                delta_seconds;
+        }
+
+        var zombie_was_hit = false;
+
+        for (&bullets) |*bullet| {
+            if (!bullet.active) {
+                continue;
+            }
+
+            if (rectanglesOverlap(
+                bullet.x,
+                bullet.y,
+                bullet_size,
+                bullet_size,
+                zombie.x,
+                zombie.y,
+                zombie_size,
+                zombie_size,
+            )) {
+                bullet.active = false;
+                zombie.active = false;
+
+                score += 1;
+                zombie_was_hit = true;
+
+                break;
+            }
+        }
+
+        if (zombie_was_hit) {
+            continue;
+        }
+
+        if (rectanglesOverlap(
+            player_x,
+            player_y,
+            player_width,
+            player_height,
+            zombie.x,
+            zombie.y,
+            zombie_size,
+            zombie_size,
+        )) {
+            game_over = true;
+            return;
+        }
+    }
+}
+
+fn clearZombies() void {
+    for (&zombies) |*zombie| {
+        zombie.* = .{};
+    }
+}
+
+fn clearBullets() void {
+    for (&bullets) |*bullet| {
+        bullet.* = .{};
+    }
+}
+
+fn resetGame() void {
+    player_x =
+        (canvas_width - player_width) / 2.0;
+
+    player_y =
+        (canvas_height - player_height) / 2.0;
+
+    aim_x = canvas_width / 2.0;
+    aim_y = canvas_height / 2.0;
+
+    left_pressed = false;
+    right_pressed = false;
+    up_pressed = false;
+    down_pressed = false;
+
+    shooting = false;
+    shooting_timer = 0.0;
+
+    zombie_spawn_timer = 0.5;
+
+    score = 0;
+    game_over = false;
+
+    clearZombies();
+    clearBullets();
+
+    initialized = true;
+}
+
+export fn setInput(
+    left: i32,
+    right: i32,
+    up: i32,
+    down: i32,
+) void {
+    left_pressed = left != 0;
+    right_pressed = right != 0;
+    up_pressed = up != 0;
+    down_pressed = down != 0;
+}
+
+export fn setAim(x: f32, y: f32) void {
+    aim_x = x;
+    aim_y = y;
+}
+
+export fn setShooting(value: i32) void {
+    shooting = value != 0;
+}
+
+export fn setSeed(seed: u32) void {
+    random_state = if (seed == 0)
+        0x12345678
+    else
+        seed;
+}
+
+export fn update(delta_seconds: f32) void {
+    if (!initialized) {
+        resetGame();
+    }
+
+    if (game_over) {
+        return;
+    }
+
+    const delta = if (delta_seconds > 0.05)
+        0.05
+    else
+        delta_seconds;
+
+    updatePlayer(delta);
+
+    shooting_timer -= delta;
+
+    if (shooting and shooting_timer <= 0.0) {
+        spawnBullet();
+
+        // Aproximadamente seis tiros por segundo.
+        shooting_timer = 0.16;
+    }
+
+    zombie_spawn_timer -= delta;
+
+    if (zombie_spawn_timer <= 0.0) {
+        spawnZombie();
+
+        // Um zumbi por segundo.
+        zombie_spawn_timer = 1.0;
+    }
+
+    updateBullets(delta);
+    updateZombies(delta);
+}
+
+export fn reset() void {
+    resetGame();
+}
+
+export fn getPlayerX() f32 {
+    return player_x;
+}
+
+export fn getPlayerY() f32 {
+    return player_y;
+}
+
+export fn getPlayerWidth() f32 {
+    return player_width;
+}
+
+export fn getPlayerHeight() f32 {
+    return player_height;
+}
+
+export fn getZombieSize() f32 {
+    return zombie_size;
+}
+
+export fn getMaxZombies() i32 {
+    return @intCast(max_zombies);
+}
+
+export fn isZombieActive(index: i32) i32 {
+    if (index < 0) {
+        return 0;
+    }
+
+    const array_index: usize =
+        @intCast(index);
+
+    if (array_index >= max_zombies) {
+        return 0;
+    }
+
+    return if (zombies[array_index].active)
+        1
+    else
+        0;
+}
+
+export fn getZombieX(index: i32) f32 {
+    if (index < 0) {
+        return 0.0;
+    }
+
+    const array_index: usize =
+        @intCast(index);
+
+    if (array_index >= max_zombies) {
+        return 0.0;
+    }
+
+    return zombies[array_index].x;
+}
+
+export fn getZombieY(index: i32) f32 {
+    if (index < 0) {
+        return 0.0;
+    }
+
+    const array_index: usize =
+        @intCast(index);
+
+    if (array_index >= max_zombies) {
+        return 0.0;
+    }
+
+    return zombies[array_index].y;
+}
+
+export fn getBulletSize() f32 {
+    return bullet_size;
+}
+
+export fn getMaxBullets() i32 {
+    return @intCast(max_bullets);
+}
+
+export fn isBulletActive(index: i32) i32 {
+    if (index < 0) {
+        return 0;
+    }
+
+    const array_index: usize =
+        @intCast(index);
+
+    if (array_index >= max_bullets) {
+        return 0;
+    }
+
+    return if (bullets[array_index].active)
+        1
+    else
+        0;
+}
+
+export fn getBulletX(index: i32) f32 {
+    if (index < 0) {
+        return 0.0;
+    }
+
+    const array_index: usize =
+        @intCast(index);
+
+    if (array_index >= max_bullets) {
+        return 0.0;
+    }
+
+    return bullets[array_index].x;
+}
+
+export fn getBulletY(index: i32) f32 {
+    if (index < 0) {
+        return 0.0;
+    }
+
+    const array_index: usize =
+        @intCast(index);
+
+    if (array_index >= max_bullets) {
+        return 0.0;
+    }
+
+    return bullets[array_index].y;
+}
+
+export fn getScore() u32 {
+    return score;
+}
+
+export fn getGameOver() i32 {
+    return if (game_over) 1 else 0;
+}
